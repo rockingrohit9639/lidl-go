@@ -28,6 +28,7 @@ Usage:
   lidl coupons [-all] [-json]                          list coupons
   lidl activate <id>... | -all                         activate coupons
   lidl deactivate <id>...                              deactivate coupons
+  lidl offers [-store DE5092] [-json]                  list this week's offers of a store
 `
 
 func main() {
@@ -50,6 +51,8 @@ func main() {
 		err = activate(ctx, os.Args[2:])
 	case "deactivate":
 		err = deactivate(ctx, os.Args[2:])
+	case "offers":
+		err = offers(ctx, os.Args[2:])
 	case "help", "-h", "--help":
 		fmt.Print(usage)
 	default:
@@ -69,6 +72,7 @@ func main() {
 type config struct {
 	Country      string `json:"country"`
 	Language     string `json:"language"`
+	Store        string `json:"store,omitempty"`
 	RefreshToken string `json:"refresh_token,omitempty"`
 	Verifier     string `json:"pending_verifier,omitempty"`
 }
@@ -359,6 +363,59 @@ func deactivate(ctx context.Context, args []string) error {
 			return err
 		}
 		fmt.Println("Deactivated", id)
+	}
+	return nil
+}
+
+func offers(ctx context.Context, args []string) error {
+	cfg, err := loadConfig()
+	if err != nil {
+		return err
+	}
+	fs := flag.NewFlagSet("offers", flag.ExitOnError)
+	store := fs.String("store", cfg.Store, "store ID, as on a receipt (default: the store of your last receipt)")
+	asJSON := fs.Bool("json", false, "print the offers as JSON")
+	fs.Parse(args)
+
+	client, err := newClient()
+	if err != nil {
+		return err
+	}
+	if *store == "" {
+		last, err := client.Receipts(ctx, 1)
+		if err != nil {
+			return err
+		}
+		if len(last) == 0 {
+			return errors.New("no receipt to take the store from; use -store")
+		}
+		*store = last[0].StoreCode
+	}
+	list, err := client.Offers(ctx, *store)
+	if err != nil {
+		return err
+	}
+	if *store != cfg.Store {
+		if cfg, err = loadConfig(); err != nil {
+			return err
+		}
+		cfg.Store = *store
+		if err := saveConfig(cfg); err != nil {
+			return err
+		}
+	}
+	if *asJSON {
+		return printJSON(list)
+	}
+	for _, o := range list {
+		price, old := "", ""
+		if o.Price != 0 {
+			price = o.Price.String()
+		}
+		if o.OldPrice != 0 {
+			old = "was " + o.OldPrice.String()
+		}
+		fmt.Printf("%-38s %7s %-9s %-14s until %s\n", o.Title, price, old, o.Discount, o.End.Local().Format("2006-01-02"))
 	}
 	return nil
 }
