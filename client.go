@@ -103,6 +103,7 @@ func (c *Client) get(ctx context.Context, url string, out any) error {
 	req.Header.Set("Operating-System", "iOs")
 	req.Header.Set("App", "com.lidl.eci.lidl.plus")
 	req.Header.Set("Accept-Language", c.Language)
+	req.Header.Set("Country", c.Country)
 	return doJSON(c.HTTP, req, out)
 }
 

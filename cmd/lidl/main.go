@@ -24,6 +24,7 @@ Usage:
   lidl login -code <callback URL or code>              finish a login
   lidl receipts [-limit N] [-json]                     list receipts
   lidl receipt [-json|-raw] <id>                       show one receipt with its items
+  lidl coupons [-all] [-json]                          list coupons
 `
 
 func main() {
@@ -40,6 +41,8 @@ func main() {
 		err = receipts(ctx, os.Args[2:])
 	case "receipt":
 		err = receipt(ctx, os.Args[2:])
+	case "coupons":
+		err = coupons(ctx, os.Args[2:])
 	case "help", "-h", "--help":
 		fmt.Print(usage)
 	default:
@@ -256,6 +259,42 @@ func receipt(ctx context.Context, args []string) error {
 		}
 	}
 	fmt.Printf("\n%-24s %14s %8s\n", "Total", r.Payment, r.TotalAmount)
+	return nil
+}
+
+func coupons(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("coupons", flag.ExitOnError)
+	all := fs.Bool("all", false, "also list coupons for single other stores and the online shop")
+	asJSON := fs.Bool("json", false, "print the coupons as JSON")
+	fs.Parse(args)
+
+	client, err := newClient()
+	if err != nil {
+		return err
+	}
+	list, err := client.Coupons(ctx)
+	if err != nil {
+		return err
+	}
+	if !*all {
+		kept := list[:0]
+		for _, c := range list {
+			if c.Section == "AllStores" {
+				kept = append(kept, c)
+			}
+		}
+		list = kept
+	}
+	if *asJSON {
+		return printJSON(list)
+	}
+	for _, c := range list {
+		active := " "
+		if c.Activated {
+			active = "*"
+		}
+		fmt.Printf("%s %6s  %-40s until %s  %s\n", active, c.Discount, c.Title, c.End.Local().Format("2006-01-02"), c.Condition)
+	}
 	return nil
 }
 

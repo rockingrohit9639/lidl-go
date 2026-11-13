@@ -1,6 +1,6 @@
 # lidl-go
 
-An unofficial Go client and command line tool for Lidl Plus. It reads your digital receipts.
+An unofficial Go client and command line tool for Lidl Plus. It reads your digital receipts and coupons.
 
 This project is not affiliated with Lidl. It uses the private API of the Lidl Plus app, which can change or stop working at any time. Use it with your own account only.
 
@@ -38,6 +38,14 @@ lidl receipt -raw <id>   # the receipt as Lidl sent it
 
 Items are read from the printed receipt that Lidl sends as HTML. This is tested with receipts from Germany.
 
+## Coupons
+
+```bash
+lidl coupons         # coupons that work in every store; * marks activated ones
+lidl coupons -all    # also coupons for single other stores and the online shop
+lidl coupons -json
+```
+
 ## Use it from Go
 
 ```go
@@ -51,6 +59,8 @@ receipt, err := client.Receipt(ctx, list[0].ID)
 for _, item := range receipt.Items {
 	fmt.Println(item.Name, item.Quantity, item.Amount)
 }
+
+coupons, err := client.Coupons(ctx)
 ```
 
 ## Thanks
