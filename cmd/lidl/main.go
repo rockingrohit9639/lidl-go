@@ -1,0 +1,275 @@
+// Command lidl reads data from a Lidl Plus account.
+package main
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"errors"
+	"flag"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"strings"
+
+	lidl "github.com/rockingrohit9639/lidl-go"
+)
+
+const usage = `lidl - unofficial Lidl Plus client
+
+Usage:
+  lidl login [-country DE] [-language de] [-no-open]   start a login
+  lidl login -code <callback URL or code>              finish a login
+  lidl receipts [-limit N] [-json]                     list receipts
+  lidl receipt [-json|-raw] <id>                       show one receipt with its items
+`
+
+func main() {
+	if len(os.Args) < 2 {
+		fmt.Fprint(os.Stderr, usage)
+		os.Exit(2)
+	}
+	ctx := context.Background()
+	var err error
+	switch os.Args[1] {
+	case "login":
+		err = login(ctx, os.Args[2:])
+	case "receipts":
+		err = receipts(ctx, os.Args[2:])
+	case "receipt":
+		err = receipt(ctx, os.Args[2:])
+	case "help", "-h", "--help":
+		fmt.Print(usage)
+	default:
+		fmt.Fprint(os.Stderr, usage)
+		os.Exit(2)
+	}
+	if errors.Is(err, lidl.ErrNotLoggedIn) {
+		fmt.Fprintln(os.Stderr, "Not logged in. Run `lidl login` first.")
+		os.Exit(1)
+	}
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}
+
+type config struct {
+	Country      string `json:"country"`
+	Language     string `json:"language"`
+	RefreshToken string `json:"refresh_token,omitempty"`
+	Verifier     string `json:"pending_verifier,omitempty"`
+}
+
+func configPath() (string, error) {
+	if p := os.Getenv("LIDL_GO_CONFIG"); p != "" {
+		return p, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".config", "lidl-go", "config.json"), nil
+}
+
+func loadConfig() (config, error) {
+	cfg := config{Country: "DE", Language: "de"}
+	path, err := configPath()
+	if err != nil {
+		return cfg, err
+	}
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return cfg, nil
+	}
+	if err != nil {
+		return cfg, err
+	}
+	return cfg, json.Unmarshal(data, &cfg)
+}
+
+func saveConfig(cfg config) error {
+	path, err := configPath()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, append(data, '\n'), 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
+func newClient() (*lidl.Client, error) {
+	cfg, err := loadConfig()
+	if err != nil {
+		return nil, err
+	}
+	client := lidl.NewClient(cfg.Country, cfg.Language, cfg.RefreshToken)
+	client.OnRefresh = func(tok lidl.Token) error {
+		cfg.RefreshToken = tok.RefreshToken
+		return saveConfig(cfg)
+	}
+	return client, nil
+}
+
+func login(ctx context.Context, args []string) error {
+	cfg, err := loadConfig()
+	if err != nil {
+		return err
+	}
+	fs := flag.NewFlagSet("login", flag.ExitOnError)
+	country := fs.String("country", cfg.Country, "country code (DE, AT, NL, ...)")
+	language := fs.String("language", cfg.Language, "language code (de, en, ...)")
+	code := fs.String("code", "", "callback URL or code from a started login")
+	noOpen := fs.Bool("no-open", false, "do not open the browser")
+	fs.Parse(args)
+
+	pasted := *code
+	if pasted == "" {
+		cfg.Country, cfg.Language = strings.ToUpper(*country), strings.ToLower(*language)
+		if cfg.Verifier, err = lidl.NewVerifier(); err != nil {
+			return err
+		}
+		if err := saveConfig(cfg); err != nil {
+			return err
+		}
+		link := lidl.AuthorizeURL(cfg.Verifier, cfg.Country, cfg.Language)
+		fmt.Printf(`Open this page and log in:
+
+  %s
+
+Before you log in, open the browser DevTools, go to the Network tab and
+tick "Preserve log". After the login, the last request is a link that starts
+with com.lidlplus.app://callback - copy it.
+
+Paste the link here (or press Enter and run "lidl login -code <link>" later): `, link)
+		if !*noOpen {
+			openBrowser(link)
+		}
+		line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+		if pasted = strings.TrimSpace(line); pasted == "" {
+			fmt.Println()
+			return nil
+		}
+	}
+
+	if cfg.Verifier == "" {
+		return errors.New("no login in progress; run `lidl login` first")
+	}
+	authCode, err := lidl.ParseCallback(pasted)
+	if err != nil {
+		return err
+	}
+	tok, err := lidl.ExchangeCode(ctx, nil, authCode, cfg.Verifier)
+	if err != nil {
+		return err
+	}
+	cfg.RefreshToken, cfg.Verifier = tok.RefreshToken, ""
+	if err := saveConfig(cfg); err != nil {
+		return err
+	}
+	fmt.Println("Logged in.")
+	return nil
+}
+
+func openBrowser(link string) {
+	switch runtime.GOOS {
+	case "darwin":
+		exec.Command("open", link).Start()
+	case "windows":
+		exec.Command("rundll32", "url.dll,FileProtocolHandler", link).Start()
+	default:
+		exec.Command("xdg-open", link).Start()
+	}
+}
+
+func receipts(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("receipts", flag.ExitOnError)
+	limit := fs.Int("limit", 20, "how many receipts to list, 0 for all")
+	asJSON := fs.Bool("json", false, "print the list as Lidl sent it")
+	fs.Parse(args)
+
+	client, err := newClient()
+	if err != nil {
+		return err
+	}
+	list, err := client.Receipts(ctx, *limit)
+	if err != nil {
+		return err
+	}
+	if *asJSON {
+		raw := make([]json.RawMessage, len(list))
+		for i, r := range list {
+			raw[i] = r.Raw
+		}
+		return printJSON(raw)
+	}
+	for _, r := range list {
+		fmt.Printf("%s  %8s %s  %2d items  %s\n", wallTime(r.Date), r.TotalAmount, r.Currency.Code, r.ArticlesCount, r.ID)
+	}
+	return nil
+}
+
+func receipt(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("receipt", flag.ExitOnError)
+	asJSON := fs.Bool("json", false, "print the receipt as JSON")
+	asRaw := fs.Bool("raw", false, "print the receipt as Lidl sent it")
+	fs.Parse(args)
+	if fs.NArg() != 1 {
+		return errors.New("usage: lidl receipt [-json|-raw] <id>")
+	}
+
+	client, err := newClient()
+	if err != nil {
+		return err
+	}
+	r, err := client.Receipt(ctx, fs.Arg(0))
+	if err != nil {
+		return err
+	}
+	if *asRaw {
+		return printJSON(r.Raw)
+	}
+	if *asJSON {
+		return printJSON(r)
+	}
+
+	fmt.Printf("%s  %s, %s %s\n\n", wallTime(r.Date), r.Store.Address, r.Store.PostalCode, r.Store.Locality)
+	for _, item := range r.Items {
+		quantity := ""
+		if item.Quantity != 1 {
+			quantity = fmt.Sprintf("%g x %s", item.Quantity, item.UnitPrice)
+		}
+		fmt.Printf("%-24s %14s %8s\n", item.Name, quantity, item.Amount)
+		for _, d := range item.Discounts {
+			fmt.Printf("  %-22s %14s %8s\n", d.Description, "", d.Amount)
+		}
+	}
+	fmt.Printf("\n%-24s %14s %8s\n", "Total", r.Payment, r.TotalAmount)
+	return nil
+}
+
+// wallTime shortens a receipt date to "2006-01-02 15:04".
+func wallTime(date string) string {
+	if len(date) >= 16 {
+		return date[:10] + " " + date[11:16]
+	}
+	return date
+}
+
+func printJSON(v any) error {
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	enc.SetEscapeHTML(false)
+	return enc.Encode(v)
+}

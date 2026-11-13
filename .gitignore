@@ -1,0 +1,4 @@
+/lidl
+config.json
+*.token
+.DS_Store
