@@ -1,6 +1,6 @@
 # lidl-go
 
-An unofficial Go client and command line tool for Lidl Plus. It reads your digital receipts and coupons.
+An unofficial Go client and command line tool for Lidl Plus. It reads your digital receipts and coupons, and can activate coupons.
 
 This project is not affiliated with Lidl. It uses the private API of the Lidl Plus app, which can change or stop working at any time. Use it with your own account only.
 
@@ -44,6 +44,10 @@ Items are read from the printed receipt that Lidl sends as HTML. This is tested 
 lidl coupons         # coupons that work in every store; * marks activated ones
 lidl coupons -all    # also coupons for single other stores and the online shop
 lidl coupons -json
+
+lidl activate <id>     # activate one or more coupons
+lidl activate -all     # activate every valid coupon that works in every store
+lidl deactivate <id>   # switch a coupon off again
 ```
 
 ## Use it from Go
@@ -61,6 +65,7 @@ for _, item := range receipt.Items {
 }
 
 coupons, err := client.Coupons(ctx)
+err = client.ActivateCoupon(ctx, coupons[0].ID)
 ```
 
 ## Thanks

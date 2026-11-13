@@ -90,11 +90,15 @@ func (c *Client) accessToken(ctx context.Context) (string, error) {
 }
 
 func (c *Client) get(ctx context.Context, url string, out any) error {
+	return c.do(ctx, http.MethodGet, url, out)
+}
+
+func (c *Client) do(ctx context.Context, method, url string, out any) error {
 	token, err := c.accessToken(ctx)
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	req, err := http.NewRequestWithContext(ctx, method, url, nil)
 	if err != nil {
 		return err
 	}
@@ -123,6 +127,9 @@ func doJSON(hc *http.Client, req *http.Request, out any) error {
 	}
 	if res.StatusCode < 200 || res.StatusCode > 299 {
 		return &APIError{Status: res.StatusCode, URL: req.URL.String(), Body: string(body)}
+	}
+	if out == nil {
+		return nil
 	}
 	if err := json.Unmarshal(body, out); err != nil {
 		return fmt.Errorf("lidl: bad JSON from %s: %w", req.URL, err)

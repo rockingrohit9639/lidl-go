@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	lidl "github.com/rockingrohit9639/lidl-go"
 )
@@ -25,6 +26,8 @@ Usage:
   lidl receipts [-limit N] [-json]                     list receipts
   lidl receipt [-json|-raw] <id>                       show one receipt with its items
   lidl coupons [-all] [-json]                          list coupons
+  lidl activate <id>... | -all                         activate coupons
+  lidl deactivate <id>...                              deactivate coupons
 `
 
 func main() {
@@ -43,6 +46,10 @@ func main() {
 		err = receipt(ctx, os.Args[2:])
 	case "coupons":
 		err = coupons(ctx, os.Args[2:])
+	case "activate":
+		err = activate(ctx, os.Args[2:])
+	case "deactivate":
+		err = deactivate(ctx, os.Args[2:])
 	case "help", "-h", "--help":
 		fmt.Print(usage)
 	default:
@@ -293,7 +300,65 @@ func coupons(ctx context.Context, args []string) error {
 		if c.Activated {
 			active = "*"
 		}
-		fmt.Printf("%s %6s  %-40s until %s  %s\n", active, c.Discount, c.Title, c.End.Local().Format("2006-01-02"), c.Condition)
+		fmt.Printf("%s %6s  %-40s until %s  %s\n", active, c.Discount, c.Title, c.End.Local().Format("2006-01-02"), c.ID)
+	}
+	return nil
+}
+
+func activate(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("activate", flag.ExitOnError)
+	all := fs.Bool("all", false, "activate every valid coupon that works in every store")
+	fs.Parse(args)
+	if *all == (fs.NArg() > 0) {
+		return errors.New("usage: lidl activate <id>... | -all")
+	}
+
+	client, err := newClient()
+	if err != nil {
+		return err
+	}
+	if !*all {
+		for _, id := range fs.Args() {
+			if err := client.ActivateCoupon(ctx, id); err != nil {
+				return err
+			}
+			fmt.Println("Activated", id)
+		}
+		return nil
+	}
+
+	list, err := client.Coupons(ctx)
+	if err != nil {
+		return err
+	}
+	now, count := time.Now(), 0
+	for _, c := range list {
+		if c.Section != "AllStores" || c.Activated || now.Before(c.Start) || now.After(c.End) {
+			continue
+		}
+		if err := client.ActivateCoupon(ctx, c.ID); err != nil {
+			return fmt.Errorf("%s: %w", c.Title, err)
+		}
+		fmt.Printf("Activated %s %s\n", c.Discount, c.Title)
+		count++
+	}
+	fmt.Printf("%d coupons activated.\n", count)
+	return nil
+}
+
+func deactivate(ctx context.Context, args []string) error {
+	if len(args) == 0 {
+		return errors.New("usage: lidl deactivate <id>...")
+	}
+	client, err := newClient()
+	if err != nil {
+		return err
+	}
+	for _, id := range args {
+		if err := client.DeactivateCoupon(ctx, id); err != nil {
+			return err
+		}
+		fmt.Println("Deactivated", id)
 	}
 	return nil
 }

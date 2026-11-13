@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/url"
 	"time"
 )
 
@@ -73,4 +75,14 @@ func (c *Client) Coupons(ctx context.Context) ([]Coupon, error) {
 		}
 	}
 	return all, nil
+}
+
+// ActivateCoupon switches a coupon on, so it applies at the checkout.
+func (c *Client) ActivateCoupon(ctx context.Context, id string) error {
+	return c.do(ctx, http.MethodPost, couponsAPI+"/v1/promotions/"+url.PathEscape(id)+"/activation", nil)
+}
+
+// DeactivateCoupon switches a coupon off again.
+func (c *Client) DeactivateCoupon(ctx context.Context, id string) error {
+	return c.do(ctx, http.MethodDelete, couponsAPI+"/v1/promotions/"+url.PathEscape(id)+"/activation", nil)
 }
